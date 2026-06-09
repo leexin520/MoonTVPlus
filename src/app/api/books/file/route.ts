@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { db } from '@/lib/db';
-import { opdsClient } from '@/lib/opds.client';
+import { bookProvider } from '@/lib/book-provider';
 
 import { getAuthorizedBooksUsername } from '../_utils';
 
@@ -11,12 +11,13 @@ type FilePayload = {
   sourceId?: string;
   bookId?: string;
   href?: string;
-  format?: 'epub' | 'pdf' | null;
+  format?: 'epub' | 'pdf' | 'chapters' | null;
 };
 
 async function resolveFileHref(username: string, payload: FilePayload): Promise<{ sourceId: string; href: string }> {
   const sourceId = payload.sourceId?.trim();
   if (!sourceId) throw new Error('缺少 sourceId');
+  if (payload.format === 'chapters') throw new Error('章节型书源不提供文件下载');
 
   if (payload.href?.trim()) {
     return { sourceId, href: payload.href.trim() };
@@ -35,9 +36,10 @@ async function resolveFileHref(username: string, payload: FilePayload): Promise<
   const detailHref = shelfItem?.detailHref || readRecord?.detailHref;
   if (!detailHref) throw new Error('找不到可下载文件');
 
-  const preferred = await opdsClient.getPreferredAcquisition(sourceId, detailHref);
+  const preferred = await bookProvider.getPreferredAcquisition(sourceId, detailHref);
+  if (preferred.format === 'chapters') throw new Error('章节型书源不提供文件下载');
   if (payload.format && preferred.format !== payload.format) {
-    const detail = await opdsClient.getBookDetail(sourceId, detailHref);
+    const detail = await bookProvider.getBookDetail(sourceId, detailHref);
     const matched = detail.acquisitionLinks.find((item) => (payload.format === 'pdf' ? item.type.toLowerCase().includes('pdf') : item.type.toLowerCase().includes('epub')));
     if (!matched?.href) throw new Error('找不到对应格式文件');
     return { sourceId, href: matched.href };
@@ -47,7 +49,7 @@ async function resolveFileHref(username: string, payload: FilePayload): Promise<
 }
 
 async function proxyFile(request: NextRequest, sourceId: string, href: string) {
-  const source = await opdsClient.getSourceById(sourceId);
+  const source = await bookProvider.getSourceById(sourceId);
   const headers = new Headers();
   if (source.authMode === 'basic' && source.username) {
     headers.set('Authorization', `Basic ${Buffer.from(`${source.username}:${source.password || ''}`).toString('base64')}`);
@@ -98,7 +100,7 @@ export async function GET(request: NextRequest) {
       sourceId: searchParams.get('sourceId') || undefined,
       bookId: searchParams.get('bookId') || undefined,
       href: searchParams.get('href') || undefined,
-      format: (searchParams.get('format')?.trim() as 'epub' | 'pdf' | null) || null,
+      format: (searchParams.get('format')?.trim() as 'epub' | 'pdf' | 'chapters' | null) || null,
     });
     return await proxyFile(request, resolved.sourceId, resolved.href);
   } catch (error) {

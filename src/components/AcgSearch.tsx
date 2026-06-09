@@ -31,6 +31,13 @@ interface AcgSearchProps {
 }
 
 type AcgSearchSource = 'acgrip' | 'mikan' | 'dmhy';
+type DownloadTool = 'aria2' | 'Transmission' | 'qBittorrent';
+
+const downloadToolOptions: Array<{ value: DownloadTool; label: string }> = [
+  { value: 'aria2', label: 'aria2' },
+  { value: 'qBittorrent', label: 'qBittorrent' },
+  { value: 'Transmission', label: 'Transmission' },
+];
 
 export default function AcgSearch({
   keyword,
@@ -47,6 +54,7 @@ export default function AcgSearch({
   const [showNameDialog, setShowNameDialog] = useState(false);
   const [selectedItem, setSelectedItem] = useState<AcgSearchItem | null>(null);
   const [customName, setCustomName] = useState('');
+  const [downloadTool, setDownloadTool] = useState<DownloadTool>('aria2');
   const [toast, setToast] = useState<ToastProps | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const isLoadingMoreRef = useRef(false);
@@ -204,6 +212,7 @@ export default function AcgSearch({
         body: JSON.stringify({
           url: selectedItem.torrentUrl,
           name: customName.trim(),
+          tool: downloadTool,
         }),
       });
 
@@ -228,6 +237,7 @@ export default function AcgSearch({
       setDownloadingId(null);
       setSelectedItem(null);
       setCustomName('');
+      setDownloadTool('aria2');
     }
   };
 
@@ -365,12 +375,27 @@ export default function AcgSearch({
                 className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500'
                 autoFocus
               />
+              <label className='mt-4 block text-sm font-medium text-gray-700 dark:text-gray-300'>
+                下载方式
+              </label>
+              <select
+                value={downloadTool}
+                onChange={(e) => setDownloadTool(e.target.value as DownloadTool)}
+                className='mt-1 w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500'
+              >
+                {downloadToolOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               <div className='mt-4 flex gap-2 justify-end'>
                 <button
                   onClick={() => {
                     setShowNameDialog(false);
                     setSelectedItem(null);
                     setCustomName('');
+                    setDownloadTool('aria2');
                   }}
                   className='px-4 py-2 rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 transition-colors'
                 >

@@ -45,7 +45,22 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { action, Enabled, URL, Username, Password, RootPaths, OfflineDownloadPath, ScanInterval, ScanMode, DisableVideoPreview } = body;
+    const {
+      action,
+      Enabled,
+      URL,
+      Username,
+      Password,
+      RootPaths,
+      OfflineDownloadPath,
+      OfflineDownloadUseCustomSource,
+      OfflineDownloadURL,
+      OfflineDownloadUsername,
+      OfflineDownloadPassword,
+      ScanInterval,
+      ScanMode,
+      DisableVideoPreview,
+    } = body;
 
     const authInfo = getAuthInfoFromCookie(request);
     if (!authInfo || !authInfo.username) {
@@ -74,6 +89,10 @@ export async function POST(request: NextRequest) {
           Password: Password || '',
           RootPaths: RootPaths || ['/'],
           OfflineDownloadPath: OfflineDownloadPath || '/',
+          OfflineDownloadUseCustomSource: OfflineDownloadUseCustomSource || false,
+          OfflineDownloadURL: OfflineDownloadURL || '',
+          OfflineDownloadUsername: OfflineDownloadUsername || '',
+          OfflineDownloadPassword: OfflineDownloadPassword || '',
           LastRefreshTime: adminConfig.OpenListConfig?.LastRefreshTime,
           ResourceCount: adminConfig.OpenListConfig?.ResourceCount,
           ScanInterval: 0,
@@ -93,6 +112,16 @@ export async function POST(request: NextRequest) {
       if (!URL || !Username || !Password) {
         return NextResponse.json(
           { error: '请提供 URL、账号和密码' },
+          { status: 400 }
+        );
+      }
+
+      if (
+        OfflineDownloadUseCustomSource &&
+        (!OfflineDownloadURL || !OfflineDownloadUsername || !OfflineDownloadPassword)
+      ) {
+        return NextResponse.json(
+          { error: '请提供离线下载 OpenList URL、账号和密码' },
           { status: 400 }
         );
       }
@@ -130,6 +159,24 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      if (OfflineDownloadUseCustomSource) {
+        try {
+          console.log('[OpenList Config] 验证离线下载 OpenList 账号密码');
+          await OpenListClient.login(
+            OfflineDownloadURL,
+            OfflineDownloadUsername,
+            OfflineDownloadPassword
+          );
+          console.log('[OpenList Config] 离线下载 OpenList 账号密码验证成功');
+        } catch (error) {
+          console.error('[OpenList Config] 离线下载 OpenList 账号密码验证失败:', error);
+          return NextResponse.json(
+            { error: '离线下载 OpenList 账号密码验证失败: ' + (error as Error).message },
+            { status: 400 }
+          );
+        }
+      }
+
       adminConfig.OpenListConfig = {
         Enabled: true,
         URL,
@@ -137,6 +184,10 @@ export async function POST(request: NextRequest) {
         Password,
         RootPaths: cleanedRootPaths,
         OfflineDownloadPath: OfflineDownloadPath || '/',
+        OfflineDownloadUseCustomSource: OfflineDownloadUseCustomSource || false,
+        OfflineDownloadURL: OfflineDownloadURL || '',
+        OfflineDownloadUsername: OfflineDownloadUsername || '',
+        OfflineDownloadPassword: OfflineDownloadPassword || '',
         LastRefreshTime: adminConfig.OpenListConfig?.LastRefreshTime,
         ResourceCount: adminConfig.OpenListConfig?.ResourceCount,
         ScanInterval: scanInterval,

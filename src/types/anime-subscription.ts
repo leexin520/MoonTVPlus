@@ -11,7 +11,10 @@ export interface AnimeSubscription {
   createdBy: string;
 }
 
+export type AnimeSubscriptionDownloadTool = 'aria2' | 'qBittorrent' | 'Transmission';
+
 export interface AnimeSubscriptionConfig {
   Enabled: boolean;
+  DownloadTool?: AnimeSubscriptionDownloadTool;
   Subscriptions: AnimeSubscription[];
 }

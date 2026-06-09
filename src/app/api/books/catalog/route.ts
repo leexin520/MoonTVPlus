@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { opdsClient } from '@/lib/opds.client';
+import { bookProvider } from '@/lib/book-provider';
 
 import { getAuthorizedBooksUsername } from '../_utils';
 
@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     if (!sourceId) {
       return NextResponse.json({ error: '缺少 sourceId' }, { status: 400 });
     }
-    const result = await opdsClient.getCatalog(sourceId, href);
+    const result = await bookProvider.getCatalog(sourceId, href);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });

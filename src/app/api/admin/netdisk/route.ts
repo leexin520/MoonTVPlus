@@ -79,6 +79,8 @@ export async function POST(request: NextRequest) {
         Enabled: Boolean(Quark?.Enabled),
         Cookie: normalizedCookie,
         SavePath: Quark?.SavePath || '/',
+        PlayMode: Quark?.PlayMode === 'direct_first' ? 'direct_first' : 'transcode_first',
+        MultiThreadPlayback: Boolean(Quark?.MultiThreadPlayback),
       };
       adminConfig.NetDiskConfig.Mobile = {
         Enabled: Boolean(Mobile?.Enabled),

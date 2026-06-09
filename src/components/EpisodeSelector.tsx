@@ -96,7 +96,68 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   onShowToast,
 }) => {
   const router = useRouter();
-  const pageCount = Math.ceil(totalEpisodes / episodesPerPage);
+
+  const parseSxxExxTitle = useCallback((title?: string) => {
+    const match = title?.match(/[Ss](\d+)[Ee](\d{1,4}(?:\.\d+)?)/);
+    if (!match) {
+      return null;
+    }
+
+    const seasonNumber = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(seasonNumber)) {
+      return null;
+    }
+
+    return { season: seasonNumber };
+  }, []);
+
+  const episodeGroupsAsc = useMemo(() => {
+    const sxxexxMatchCount = episodes_titles.reduce((count, title) => {
+      return count + (parseSxxExxTitle(title) ? 1 : 0);
+    }, 0);
+
+    if (sxxexxMatchCount >= 2) {
+      const seasons = new Map<number, number[]>();
+      const otherEpisodes: number[] = [];
+
+      for (let episodeNumber = 1; episodeNumber <= totalEpisodes; episodeNumber += 1) {
+        const parsed = parseSxxExxTitle(episodes_titles?.[episodeNumber - 1]);
+        if (!parsed) {
+          otherEpisodes.push(episodeNumber);
+          continue;
+        }
+
+        const episodes = seasons.get(parsed.season) ?? [];
+        episodes.push(episodeNumber);
+        seasons.set(parsed.season, episodes);
+      }
+
+      const seasonGroups = Array.from(seasons.entries())
+        .sort(([seasonA], [seasonB]) => seasonA - seasonB)
+        .map(([season, episodes]) => ({
+          label: `S${String(season).padStart(2, '0')}`,
+          episodes,
+        }));
+
+      if (otherEpisodes.length > 0) {
+        seasonGroups.push({ label: '其他', episodes: otherEpisodes });
+      }
+
+      return seasonGroups;
+    }
+
+    const pageCount = Math.ceil(totalEpisodes / episodesPerPage);
+    return Array.from({ length: pageCount }, (_, i) => {
+      const start = i * episodesPerPage + 1;
+      const end = Math.min(start + episodesPerPage - 1, totalEpisodes);
+      return {
+        label: `${start}-${end}`,
+        episodes: Array.from({ length: end - start + 1 }, (_, idx) => start + idx),
+      };
+    });
+  }, [episodesPerPage, episodes_titles, parseSxxExxTitle, totalEpisodes]);
+
+  const pageCount = episodeGroupsAsc.length;
 
   // 存储每个源的视频信息
   const [videoInfoMap, setVideoInfoMap] = useState<Map<string, VideoInfo>>(
@@ -141,56 +202,37 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
       return;
     }
 
-    const readWatchedEpisodes = () => {
-      const watched = new Set<number>();
+    const watched = new Set<number>();
 
-      try {
-        const records = getCachedPlayRecordsSnapshot();
-        const record = records[generateStorageKey(currentSource, currentId)];
-        if (record && record.index > 0 && record.play_time > 1) {
-          watched.add(record.index);
-        }
-      } catch (error) {
-        console.warn('[EpisodeSelector] Failed to read cached play records:', error);
+    try {
+      const records = getCachedPlayRecordsSnapshot();
+      const record = records[generateStorageKey(currentSource, currentId)];
+      if (record && record.index > 0 && record.play_time > 1) {
+        watched.add(record.index);
       }
+    } catch (error) {
+      console.warn('[EpisodeSelector] Failed to read cached play records:', error);
+    }
 
-      try {
-        const episodeRecords = loadAllLocalEpisodeProgressRecords(
-          episodeProgressContentKey
-        );
+    try {
+      const episodeRecords = loadAllLocalEpisodeProgressRecords(
+        episodeProgressContentKey
+      );
 
-        for (const [episodeIndex, record] of Object.entries(episodeRecords)) {
-          if (Number(record?.playTime) > 1) {
-            const episodeNumber = Number(episodeIndex) + 1;
-            if (episodeNumber >= 1 && episodeNumber <= totalEpisodes) {
-              watched.add(episodeNumber);
-            }
+      for (const [episodeIndex, record] of Object.entries(episodeRecords)) {
+        if (Number(record?.playTime) > 1) {
+          const episodeNumber = Number(episodeIndex) + 1;
+          if (episodeNumber >= 1 && episodeNumber <= totalEpisodes) {
+            watched.add(episodeNumber);
           }
         }
-      } catch (error) {
-        console.warn('[EpisodeSelector] Failed to read local episode progress:', error);
       }
+    } catch (error) {
+      console.warn('[EpisodeSelector] Failed to read local episode progress:', error);
+    }
 
-      setWatchedEpisodes(watched);
-    };
-
-    readWatchedEpisodes();
-
-    const handlePlayRecordsUpdated = () => {
-      readWatchedEpisodes();
-    };
-
-    window.addEventListener('playRecordsUpdated', handlePlayRecordsUpdated as EventListener);
-    window.addEventListener('storage', handlePlayRecordsUpdated);
-
-    return () => {
-      window.removeEventListener(
-        'playRecordsUpdated',
-        handlePlayRecordsUpdated as EventListener
-      );
-      window.removeEventListener('storage', handlePlayRecordsUpdated);
-    };
-  }, [currentSource, currentId, episodeProgressContentKey, totalEpisodes]);
+    setWatchedEpisodes(watched);
+  }, [currentSource, currentId, episodeProgressContentKey, totalEpisodes, value]);
 
   // 主要的 tab 状态：'danmaku' | 'episodes' | 'sources'
   // 默认显示选集选项卡，但如果是房员则显示弹幕
@@ -205,8 +247,11 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     }
   }, [isRoomMember, activeTab]);
 
-  // 当前分页索引（0 开始）
-  const initialPage = Math.floor((value - 1) / episodesPerPage);
+  // 当前分组索引（0 开始）
+  const initialPage = Math.max(
+    0,
+    episodeGroupsAsc.findIndex((group) => group.episodes.includes(value))
+  );
   const [currentPage, setCurrentPage] = useState<number>(initialPage);
 
   // 是否倒序显示
@@ -263,6 +308,17 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     }
     return currentPage;
   }, [currentPage, descending, pageCount]);
+
+  useEffect(() => {
+    const currentEpisode = Math.max(1, Math.min(value, totalEpisodes));
+    const nextPage = episodeGroupsAsc.findIndex((group) =>
+      group.episodes.includes(currentEpisode)
+    );
+
+    if (nextPage >= 0) {
+      setCurrentPage(nextPage);
+    }
+  }, [episodeGroupsAsc, totalEpisodes, value]);
 
   // 获取视频信息的函数 - 移除 attemptedSources 依赖避免不必要的重新创建
   const getVideoInfo = useCallback(async (source: SearchResult) => {
@@ -444,25 +500,11 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     prevBackgroundLoadingRef.current = backgroundSourcesLoading;
   }, [backgroundSourcesLoading, activeTab, availableSources, getVideoInfo, optimizationEnabled, initialTestingCompleted, currentSource]);
 
-  // 升序分页标签
-  const categoriesAsc = useMemo(() => {
-    return Array.from({ length: pageCount }, (_, i) => {
-      const start = i * episodesPerPage + 1;
-      const end = Math.min(start + episodesPerPage - 1, totalEpisodes);
-      return { start, end };
-    });
-  }, [pageCount, episodesPerPage, totalEpisodes]);
-
-  // 根据 descending 状态决定分页标签的排序和内容
+  // 根据 descending 状态决定分组标签的排序和内容
   const categories = useMemo(() => {
-    if (descending) {
-      // 倒序时，label 也倒序显示
-      return [...categoriesAsc]
-        .reverse()
-        .map(({ start, end }) => `${end}-${start}`);
-    }
-    return categoriesAsc.map(({ start, end }) => `${start}-${end}`);
-  }, [categoriesAsc, descending]);
+    const groups = descending ? [...episodeGroupsAsc].reverse() : episodeGroupsAsc;
+    return groups.map((group) => group.label);
+  }, [episodeGroupsAsc, descending]);
 
   const categoryContainerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -624,11 +666,10 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     [getVideoInfo]
   );
 
-  const currentStart = currentPage * episodesPerPage + 1;
-  const currentEnd = Math.min(
-    currentStart + episodesPerPage - 1,
-    totalEpisodes
-  );
+  const currentEpisodeGroup = episodeGroupsAsc[currentPage] ?? {
+    label: '',
+    episodes: [],
+  };
 
   return (
     <div className='md:ml-2 px-4 py-0 h-full rounded-xl bg-black/10 dark:bg-white/5 flex flex-col border border-white/0 dark:border-white/30 overflow-hidden'>
@@ -765,10 +806,9 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           {/* 集数网格 */}
           <div className='flex flex-wrap gap-3 overflow-y-auto flex-1 content-start pb-4'>
             {(() => {
-              const len = currentEnd - currentStart + 1;
-              const episodes = Array.from({ length: len }, (_, i) =>
-                descending ? currentEnd - i : currentStart + i
-              );
+              const episodes = descending
+                ? [...currentEpisodeGroup.episodes].reverse()
+                : currentEpisodeGroup.episodes;
               // 过滤掉被屏蔽的集数，但保持原有索引
               return episodes
                 .filter(episodeNumber => !isEpisodeFiltered(episodeNumber))
@@ -802,12 +842,10 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                         if (title.match(/^OVA\s+\d+/i)) {
                           return title;
                         }
-                        // 如果匹配 S01E01 格式，提取并返回
-                        const sxxexxMatch = title.match(/[Ss](\d+)[Ee](\d{1,4}(?:\.\d+)?)/);
+                        // 如果匹配 S01E01 格式，只显示集数部分（去掉 SxxE）
+                        const sxxexxMatch = title.match(/[Ss]\d+[Ee](\d{1,4}(?:\.\d+)?)/);
                         if (sxxexxMatch) {
-                          const season = sxxexxMatch[1].padStart(2, '0');
-                          const episode = sxxexxMatch[2];
-                          return `S${season}E${episode}`;
+                          return sxxexxMatch[1];
                         }
                         // 如果匹配"第X集"、"第X话"、"X集"、"X话"格式，提取中间的数字（支持小数）
                         const match = title.match(/(?:第)?(\d+(?:\.\d+)?)(?:集|话)/);

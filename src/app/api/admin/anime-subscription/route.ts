@@ -23,10 +23,14 @@ export async function GET(req: NextRequest) {
     const config = await getConfig();
     const animeConfig = config.AnimeSubscriptionConfig || {
       Enabled: false,
+      DownloadTool: 'aria2',
       Subscriptions: [],
     };
 
-    return NextResponse.json(animeConfig);
+    return NextResponse.json({
+      ...animeConfig,
+      DownloadTool: animeConfig.DownloadTool || 'aria2',
+    });
   } catch (error: any) {
     console.error('获取追番订阅配置失败:', error);
     return NextResponse.json(
@@ -63,7 +67,13 @@ export async function POST(req: NextRequest) {
 
     const config = await getConfig();
     if (!config.AnimeSubscriptionConfig) {
-      config.AnimeSubscriptionConfig = { Enabled: false, Subscriptions: [] };
+      config.AnimeSubscriptionConfig = {
+        Enabled: false,
+        DownloadTool: 'aria2',
+        Subscriptions: [],
+      };
+    } else if (!config.AnimeSubscriptionConfig.DownloadTool) {
+      config.AnimeSubscriptionConfig.DownloadTool = 'aria2';
     }
 
     // 验证集数

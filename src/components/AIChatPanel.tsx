@@ -7,7 +7,6 @@ import { usePathname } from 'next/navigation';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { VideoContext } from '@/lib/ai-orchestrator';
@@ -26,6 +25,199 @@ interface AIChatPanelProps {
   useDrawer?: boolean;
   drawerWidth?: string;
 }
+
+type MarkdownSegment =
+  | { type: 'markdown'; content: string }
+  | {
+      type: 'table';
+      header: string[];
+      align: Array<'left' | 'center' | 'right' | undefined>;
+      rows: string[][];
+    };
+
+const splitMarkdownTableRow = (line: string): string[] => {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells: string[] = [];
+  let current = '';
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+    if (char === '|' && trimmed[i - 1] !== '\\') {
+      cells.push(current.replace(/\\\|/g, '|').trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  cells.push(current.replace(/\\\|/g, '|').trim());
+  return cells;
+};
+
+const getTableAlign = (cell: string): 'left' | 'center' | 'right' | undefined => {
+  const trimmed = cell.trim();
+  if (!/^:?-{3,}:?$/.test(trimmed)) return undefined;
+  if (trimmed.startsWith(':') && trimmed.endsWith(':')) return 'center';
+  if (trimmed.endsWith(':')) return 'right';
+  return 'left';
+};
+
+const isTableDelimiterRow = (line: string): boolean => {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+};
+
+const normalizeTableRow = (cells: string[], length: number): string[] => {
+  if (cells.length === length) return cells;
+  if (cells.length > length) return cells.slice(0, length);
+  return [...cells, ...Array.from({ length: length - cells.length }, () => '')];
+};
+
+const splitMarkdownByTables = (content: string): MarkdownSegment[] => {
+  const lines = content.split('\n');
+  const segments: MarkdownSegment[] = [];
+  const markdownBuffer: string[] = [];
+  let inFence = false;
+  let i = 0;
+
+  const flushMarkdown = () => {
+    const markdown = markdownBuffer.join('\n');
+    if (markdown.trim()) {
+      segments.push({ type: 'markdown', content: markdown });
+    }
+    markdownBuffer.length = 0;
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (/^(```|~~~)/.test(trimmed)) {
+      inFence = !inFence;
+      markdownBuffer.push(line);
+      i++;
+      continue;
+    }
+
+    if (
+      !inFence &&
+      line.includes('|') &&
+      i + 1 < lines.length &&
+      isTableDelimiterRow(lines[i + 1])
+    ) {
+      const header = splitMarkdownTableRow(line);
+      const delimiter = splitMarkdownTableRow(lines[i + 1]);
+
+      if (header.length === delimiter.length) {
+        flushMarkdown();
+
+        const rows: string[][] = [];
+        i += 2;
+
+        while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+          rows.push(normalizeTableRow(splitMarkdownTableRow(lines[i]), header.length));
+          i++;
+        }
+
+        segments.push({
+          type: 'table',
+          header,
+          align: delimiter.map(getTableAlign),
+          rows,
+        });
+        continue;
+      }
+    }
+
+    markdownBuffer.push(line);
+    i++;
+  }
+
+  flushMarkdown();
+  return segments;
+};
+
+const transformStrikethrough = (line: string): string => {
+  return line;
+};
+
+const transformTaskList = (line: string): string => {
+  return line.replace(/^(\s*[-*+]\s+)\[(x|X| )\]\s+/g, (_match, prefix: string, checked: string) => {
+    return `${prefix}${checked.trim() ? '☑' : '☐'} `;
+  });
+};
+
+const transformBareLinks = (line: string): string => {
+  return line.replace(/(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/g, (match, _url: string, offset: number, source: string) => {
+    const before = source.slice(Math.max(0, offset - 2), offset);
+    const previousChar = source[offset - 1];
+    const lastOpenBracket = source.lastIndexOf('[', offset);
+    const lastCloseBracket = source.lastIndexOf(']', offset);
+    const nextCloseBracket = source.indexOf(']', offset + match.length);
+    const nextOpenParen = nextCloseBracket >= 0 ? source.slice(nextCloseBracket, nextCloseBracket + 2) : '';
+
+    // 已经是 Markdown 链接目标或链接文本时不重复转换。
+    if (before === '](' || previousChar === '<' || (lastOpenBracket > lastCloseBracket && nextOpenParen === '](')) {
+      return match;
+    }
+
+    const trailing = match.match(/[.,!?;:，。！？；：]+$/)?.[0] || '';
+    const cleanUrl = trailing ? match.slice(0, -trailing.length) : match;
+    const href = cleanUrl.startsWith('www.') ? `https://${cleanUrl}` : cleanUrl;
+
+    return `[${cleanUrl}](${href})${trailing}`;
+  });
+};
+
+const transformLightweightGfm = (content: string): string => {
+  const lines = content.split('\n');
+  let inFence = false;
+
+  return lines.map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+
+    if (inFence) return line;
+
+    return transformBareLinks(transformStrikethrough(transformTaskList(line)));
+  }).join('\n');
+};
+
+const renderStrikethroughNodes = (children: React.ReactNode): React.ReactNode => {
+  return React.Children.map(children, (child) => {
+    if (typeof child === 'string') {
+      const parts: React.ReactNode[] = [];
+      const regex = /~~([^~\n]+)~~/g;
+      let lastIndex = 0;
+      let match: RegExpExecArray | null;
+
+      while ((match = regex.exec(child)) !== null) {
+        if (match.index > lastIndex) {
+          parts.push(child.slice(lastIndex, match.index));
+        }
+
+        parts.push(<del key={`${match.index}-${match[1]}`}>{match[1]}</del>);
+        lastIndex = match.index + match[0].length;
+      }
+
+      if (lastIndex < child.length) {
+        parts.push(child.slice(lastIndex));
+      }
+
+      return parts.length > 0 ? parts : child;
+    }
+
+    if (React.isValidElement(child) && (child as any).props?.children) {
+      return React.cloneElement(child as any, {
+        children: renderStrikethroughNodes((child as any).props.children),
+      });
+    }
+
+    return child;
+  });
+};
 
 export default function AIChatPanel({
   isOpen,
@@ -64,6 +256,98 @@ export default function AIChatPanel({
     return content.replace(/《([^》]+)》/g, (match, title) => {
       const encodedTitle = encodeURIComponent(title);
       return `[《${title}》](/play?title=${encodedTitle})`;
+    });
+  };
+
+  const markdownComponents = useMemo(() => ({
+    del: ({ children }: any) => <del>{children}</del>,
+    p: ({ children }: any) => <p>{renderStrikethroughNodes(children)}</p>,
+    li: ({ children }: any) => <li>{renderStrikethroughNodes(children)}</li>,
+    h1: ({ children }: any) => <h1>{renderStrikethroughNodes(children)}</h1>,
+    h2: ({ children }: any) => <h2>{renderStrikethroughNodes(children)}</h2>,
+    h3: ({ children }: any) => <h3>{renderStrikethroughNodes(children)}</h3>,
+    h4: ({ children }: any) => <h4>{renderStrikethroughNodes(children)}</h4>,
+    h5: ({ children }: any) => <h5>{renderStrikethroughNodes(children)}</h5>,
+    h6: ({ children }: any) => <h6>{renderStrikethroughNodes(children)}</h6>,
+    a: ({ href, children, ...props }: any) => {
+      // 如果是内部链接（以 / 开头），使用 Next.js Link
+      if (href?.startsWith('/')) {
+        // 如果当前在 /play 页面且链接也是 /play，不做处理（返回纯文本）
+        if (pathname === '/play' && href.startsWith('/play')) {
+          return <span>{children}</span>;
+        }
+        return (
+          <Link href={href} {...props}>
+            {children}
+          </Link>
+        );
+      }
+      // 外部链接使用普通 a 标签
+      return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+    },
+  }), [pathname]);
+
+  const inlineMarkdownComponents = useMemo(() => ({
+    ...markdownComponents,
+    p: ({ children }: any) => <span>{renderStrikethroughNodes(children)}</span>,
+  }), [markdownComponents]);
+
+  const renderAssistantContent = (content: string) => {
+    return splitMarkdownByTables(content).map((segment, segmentIndex) => {
+      if (segment.type === 'markdown') {
+        return (
+          <ReactMarkdown key={segmentIndex} components={markdownComponents}>
+            {transformLightweightGfm(convertTitleToLink(segment.content))}
+          </ReactMarkdown>
+        );
+      }
+
+      return (
+        <div
+          key={segmentIndex}
+          className='not-prose overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm ring-1 ring-black/5 dark:border-gray-700 dark:bg-gray-900 dark:ring-white/10'
+        >
+          <div className='overflow-x-auto'>
+            <table className='m-0 min-w-full border-separate border-spacing-0 text-left text-sm'>
+              <thead>
+                <tr className='bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-950/40 dark:to-blue-950/40'>
+                {segment.header.map((cell, cellIndex) => (
+                  <th
+                    key={cellIndex}
+                    className='whitespace-nowrap border-b border-gray-200 px-4 py-3 font-semibold text-gray-800 first:rounded-tl-xl last:rounded-tr-xl dark:border-gray-700 dark:text-gray-100'
+                    style={{ textAlign: segment.align[cellIndex] }}
+                  >
+                    <ReactMarkdown components={inlineMarkdownComponents}>
+                      {transformLightweightGfm(convertTitleToLink(cell))}
+                    </ReactMarkdown>
+                  </th>
+                ))}
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-gray-100 dark:divide-gray-800'>
+              {segment.rows.map((row, rowIndex) => (
+                <tr
+                  key={rowIndex}
+                  className='transition-colors odd:bg-white even:bg-gray-50/70 hover:bg-purple-50/70 dark:odd:bg-gray-900 dark:even:bg-gray-800/40 dark:hover:bg-purple-950/25'
+                >
+                  {row.map((cell, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      className='px-4 py-3 align-top leading-relaxed text-gray-700 dark:text-gray-200'
+                      style={{ textAlign: segment.align[cellIndex] }}
+                    >
+                      <ReactMarkdown components={inlineMarkdownComponents}>
+                        {transformLightweightGfm(convertTitleToLink(cell))}
+                      </ReactMarkdown>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
     });
   };
 
@@ -446,29 +730,7 @@ export default function AIChatPanel({
                       </p>
                     ) : (
                       <div className='prose prose-sm max-w-none dark:prose-invert prose-p:my-2 prose-p:leading-relaxed prose-pre:bg-gray-800 prose-pre:text-gray-100 dark:prose-pre:bg-gray-900 prose-code:text-purple-600 dark:prose-code:text-purple-400 prose-code:bg-purple-50 dark:prose-code:bg-purple-900/20 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-a:text-inherit dark:prose-a:text-inherit prose-a:no-underline hover:prose-a:underline prose-strong:text-gray-900 dark:prose-strong:text-white prose-ul:my-2 prose-ol:my-2 prose-li:my-1'>
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm as any]}
-                          components={{
-                            a: ({ node, href, children, ...props }) => {
-                              // 如果是内部链接（以 / 开头），使用 Next.js Link
-                              if (href?.startsWith('/')) {
-                                // 如果当前在 /play 页面且链接也是 /play，不做处理（返回纯文本）
-                                if (pathname === '/play' && href.startsWith('/play')) {
-                                  return <span>{children}</span>;
-                                }
-                                return (
-                                  <Link href={href} {...props}>
-                                    {children}
-                                  </Link>
-                                );
-                              }
-                              // 外部链接使用普通 a 标签
-                              return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
-                            }
-                          }}
-                        >
-                          {convertTitleToLink(message.content)}
-                        </ReactMarkdown>
+                        {renderAssistantContent(message.content)}
                       </div>
                     )}
                   </div>
@@ -652,29 +914,7 @@ export default function AIChatPanel({
                       </p>
                     ) : (
                       <div className='prose prose-sm max-w-none dark:prose-invert prose-p:my-2 prose-p:leading-relaxed prose-pre:bg-gray-800 prose-pre:text-gray-100 dark:prose-pre:bg-gray-900 prose-code:text-purple-600 dark:prose-code:text-purple-400 prose-code:bg-purple-50 dark:prose-code:bg-purple-900/20 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-a:text-inherit dark:prose-a:text-inherit prose-a:no-underline hover:prose-a:underline prose-strong:text-gray-900 dark:prose-strong:text-white prose-ul:my-2 prose-ol:my-2 prose-li:my-1'>
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm as any]}
-                          components={{
-                            a: ({ node, href, children, ...props }) => {
-                              // 如果是内部链接（以 / 开头），使用 Next.js Link
-                              if (href?.startsWith('/')) {
-                                // 如果当前在 /play 页面且链接也是 /play，不做处理（返回纯文本）
-                                if (pathname === '/play' && href.startsWith('/play')) {
-                                  return <span>{children}</span>;
-                                }
-                                return (
-                                  <Link href={href} {...props}>
-                                    {children}
-                                  </Link>
-                                );
-                              }
-                              // 外部链接使用普通 a 标签
-                              return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
-                            }
-                          }}
-                        >
-                          {convertTitleToLink(message.content)}
-                        </ReactMarkdown>
+                        {renderAssistantContent(message.content)}
                       </div>
                     )}
                   </div>

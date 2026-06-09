@@ -46,6 +46,13 @@ import SearchSuggestions from '@/components/SearchSuggestions';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
 
+type SearchCachePayload = {
+  status: 'complete' | 'partial';
+  results: SearchResult[];
+  query: string;
+  updatedAt: number;
+};
+
 function SearchPageClient() {
   // 搜索历史
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
@@ -107,14 +114,17 @@ function SearchPageClient() {
     return `search_cache_${query.trim()}`;
   };
 
-  // 从 sessionStorage 获取缓存的搜索结果
+  // 从 sessionStorage 获取完整缓存的搜索结果（partial 只给播放页快速启动使用）
   const getCachedResults = (query: string): SearchResult[] | null => {
     if (typeof window === 'undefined') return null;
     try {
       const cacheKey = getCacheKey(query);
       const cached = sessionStorage.getItem(cacheKey);
-      if (cached) {
-        return JSON.parse(cached);
+      if (!cached) return null;
+
+      const parsed = JSON.parse(cached) as SearchCachePayload;
+      if (parsed?.status === 'complete' && Array.isArray(parsed.results)) {
+        return parsed.results;
       }
     } catch (error) {
       console.error('Failed to get cached results:', error);
@@ -123,13 +133,33 @@ function SearchPageClient() {
   };
 
   // 保存搜索结果到 sessionStorage
-  const setCachedResults = (query: string, results: SearchResult[]) => {
+  const setCachedResults = (
+    query: string,
+    results: SearchResult[],
+    status: SearchCachePayload['status'] = 'complete'
+  ) => {
     if (typeof window === 'undefined') return;
     try {
       const cacheKey = getCacheKey(query);
-      sessionStorage.setItem(cacheKey, JSON.stringify(results));
+      const payload: SearchCachePayload = {
+        status,
+        results,
+        query: query.trim(),
+        updatedAt: Date.now(),
+      };
+      sessionStorage.setItem(cacheKey, JSON.stringify(payload));
     } catch (error) {
       console.error('Failed to cache results:', error);
+    }
+  };
+
+  const savePartialCacheForPlayback = () => {
+    const query = currentQueryRef.current.trim();
+    if (!query || !eventSourceRef.current || !isLoading) return;
+
+    const snapshot = searchResults.concat(pendingResultsRef.current);
+    if (snapshot.length > 20) {
+      setCachedResults(query, snapshot, 'partial');
     }
   };
 
@@ -847,7 +877,10 @@ function SearchPageClient() {
       <button
         key={item.key}
         type='button'
-        onClick={() => router.push(itemUrl)}
+        onClick={() => {
+          savePartialCacheForPlayback();
+          router.push(itemUrl);
+        }}
         className='group w-full rounded-2xl border border-gray-200/80 bg-white/90 p-3 text-left shadow-sm transition-all hover:border-green-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-900/70 dark:hover:border-green-700'
       >
         <div className='flex items-start gap-4'>
@@ -1818,6 +1851,7 @@ function SearchPageClient() {
                                   <VideoCard
                                     ref={getGroupRef(mapKey)}
                                     from='search'
+                                    onBeforeNavigate={savePartialCacheForPlayback}
                                     isAggregate={true}
                                     title={title}
                                     poster={poster}
@@ -1867,6 +1901,7 @@ function SearchPageClient() {
                                 >
                                   <VideoCard
                                     id={item.id}
+                                    onBeforeNavigate={savePartialCacheForPlayback}
                                     title={item.title}
                                     poster={item.poster}
                                     episodes={item.episodes.length}
