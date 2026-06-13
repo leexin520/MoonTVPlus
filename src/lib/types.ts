@@ -233,6 +233,26 @@ export interface IStorage {
     userName: string,
     enabled: boolean
   ): Promise<void>;
+  // Web Push订阅相关
+  upsertPushSubscription?(
+    userName: string,
+    subscription: PushSubscriptionRecord
+  ): Promise<void>;
+  getEnabledPushSubscriptions?(userName: string): Promise<PushSubscriptionRecord[]>;
+  deletePushSubscriptionByEndpoint?(
+    userName: string,
+    endpoint: string
+  ): Promise<void>;
+  deletePushSubscriptionsByTokenId?(
+    userName: string,
+    tokenId: string
+  ): Promise<void>;
+  deleteAllPushSubscriptions?(userName: string): Promise<void>;
+  updatePushSubscriptionDeliveryStats?(
+    userName: string,
+    endpoint: string,
+    success: boolean
+  ): Promise<void>;
 
   // TVBox订阅token相关
   getTvboxSubscribeToken?(userName: string): Promise<string | null>;
@@ -312,6 +332,23 @@ export interface EpisodeFilterRule {
 export interface EpisodeFilterConfig {
   rules: EpisodeFilterRule[]; // 过滤规则列表
   reverseMode?: boolean; // 反向模式：开启后仅显示符合规则的集数
+}
+
+
+export interface PushSubscriptionRecord {
+  id: string;
+  username?: string;
+  tokenId?: string | null;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  userAgent?: string | null;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lastSuccessAt?: number | null;
+  lastFailureAt?: number | null;
+  failureCount?: number;
 }
 
 // 通知类型枚举

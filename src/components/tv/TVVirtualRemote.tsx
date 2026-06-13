@@ -159,6 +159,41 @@ function focusNearestTopNavigationElement(active: HTMLElement) {
   return true;
 }
 
+function moveTopNavigationFocus(active: HTMLElement, direction: 'left' | 'right') {
+  const topNavigationElements = getTopNavigationElements();
+  const currentIndex = topNavigationElements.indexOf(active);
+  if (currentIndex === -1) return false;
+
+  const nextIndex = direction === 'right'
+    ? Math.min(currentIndex + 1, topNavigationElements.length - 1)
+    : Math.max(currentIndex - 1, 0);
+
+  if (nextIndex === currentIndex) return true;
+
+  focusElement(topNavigationElements[nextIndex]);
+  return true;
+}
+
+function moveHorizontalRowFocus(active: HTMLElement, direction: 'left' | 'right') {
+  const row = active.closest<HTMLElement>('[data-tv-focus-row="horizontal"]');
+  if (!row) return false;
+
+  const rowElements = Array.from(row.querySelectorAll<HTMLElement>(focusableSelector))
+    .filter((element) => !element.closest('[data-tv-no-focus="true"]'))
+    .filter(isVisible);
+  const currentIndex = rowElements.indexOf(active);
+  if (currentIndex === -1) return false;
+
+  const nextIndex = direction === 'right'
+    ? Math.min(currentIndex + 1, rowElements.length - 1)
+    : Math.max(currentIndex - 1, 0);
+
+  if (nextIndex === currentIndex) return true;
+
+  focusElement(rowElements[nextIndex]);
+  return true;
+}
+
 function focusElement(element: HTMLElement) {
   element.focus({ preventScroll: true });
 
@@ -200,6 +235,14 @@ function moveSpatialFocus(direction: 'up' | 'down' | 'left' | 'right', lastFocus
   if (!active || !elements.includes(active)) {
     focusElement(elements[0]);
     return;
+  }
+
+  if ((direction === 'left' || direction === 'right') && isTopNavigationElement(active)) {
+    if (moveTopNavigationFocus(active, direction)) return;
+  }
+
+  if (direction === 'left' || direction === 'right') {
+    if (moveHorizontalRowFocus(active, direction)) return;
   }
 
   if (direction === 'down' && isTopNavigationElement(active)) {

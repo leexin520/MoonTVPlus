@@ -71,3 +71,4 @@ scripts/test
 
 .agents/
 skills-lock.json
+pnpm-lock.yaml
